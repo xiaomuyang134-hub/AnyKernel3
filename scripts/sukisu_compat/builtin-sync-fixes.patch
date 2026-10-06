@@ -1,0 +1,22 @@
+--- a/kernel/include/uapi/supercall.h
++++ b/kernel/include/uapi/supercall.h
+@@ -29,6 +29,8 @@
+ DECLARE(__u32, EVENT_POST_FS_DATA, 1);
+ DECLARE(__u32, EVENT_BOOT_COMPLETED, 2);
+ DECLARE(__u32, EVENT_MODULE_MOUNTED, 3);
++// 4: services stage with start/skip result
++DECLARE(__u32, EVENT_SERVICES, 4);
+ 
+ DECLARE(__u32, KSU_GET_INFO_FLAG_LKM, (1U << 0));
+ DECLARE(__u32, KSU_GET_INFO_FLAG_MANAGER, (1U << 1));
+--- a/kernel/selinux/rules.c
++++ b/kernel/selinux/rules.c
+@@ -159,7 +159,7 @@
+     }
+ 
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
+-    struct selinux_policy *pol, *old_pol = selinux_state.policy;
++    old_pol = selinux_state.policy;
+     mutex_lock(&selinux_state.policy_mutex);
+ 
+     old_pol = rcu_dereference_protected(selinux_state.policy, lockdep_is_held(&selinux_state.policy_mutex));

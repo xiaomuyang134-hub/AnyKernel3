@@ -8,9 +8,14 @@
 #      android16-6.12 GKI 编译报 -Wincompatible-pointer-types（-Werror）；
 #   2) kernel/kpm/super_access.c 引用 netlink_kernel_cfg.cb_mutex，
 #      该成员在 Linux 6.11 被上游移除，KPM 开启时 6.11+ 内核编译失败。
+#   3) builtin 2026-10-05 同步官方 KernelSU 后 kernel_includes.h
+#      引用 arch.h，但该文件只在 main 分支存在，builtin 漏带，
+#      所有平台编译报 fatal error: 'arch.h' file not found；
+#   4) 同步同时引入两处编译错误：supercall/dispatch.c 引用未定义的
+#      EVENT_SERVICES（uapi 头缺常量），selinux/rules.c 在 5.10+ 分支
+#      重复声明 pol/old_pol。
 #
-# 两组修复均以 LINUX_VERSION_CODE 守卫，6.10 及以下内核编译结果不变；
-# 上游自行修复后 grep 检测会自动跳过，重复执行幂等。
+# 修复均以内容检测守卫，上游自行修复后自动跳过，重复执行幂等。
 #
 # 用法: apply.sh [KernelSU 目录]（调用方工作目录需为 $KERNEL_ROOT）
 
@@ -65,6 +70,52 @@ if [ -f "$SUPER_FILE" ] && grep -q 'DEFINE_MEMBER(netlink_kernel_cfg, cb_mutex)'
   fi
 else
   echo "super_access.c 不存在或无需 cb_mutex 兼容补丁，跳过"
+fi
+
+# builtin 分支 2026-10-05 同步官方 KernelSU（70fa0e092）后，
+# kernel/kernel_includes.h 引用 #include "arch.h"，但 arch.h 只存在于
+# main 分支（kernel/include/arch.h），builtin 漏带导致全部平台编译失败:
+#   fatal error: 'arch.h' file not found
+# 从本仓库分发 main 分支的 arch.h，检测到缺失时补齐；
+# 上游修复（builtin 自带 arch.h）后自动跳过，幂等。
+ARCH_REF="$KSU_DIR/kernel/include/arch.h"
+if [ -f "$KSU_DIR/kernel/kernel_includes.h" ] && grep -q '#include "arch.h"' "$KSU_DIR/kernel/kernel_includes.h"; then
+  if [ -f "$ARCH_REF" ]; then
+    echo "arch.h 已存在，跳过补齐"
+  else
+    echo "补齐缺失的 arch.h（builtin 同步官方 KernelSU 时遗漏）..."
+    cp "$COMPAT_DIR/arch.h" "$ARCH_REF" \
+      || fail "arch.h 补齐失败"
+    grep -q '__KSU_H_ARCH' "$ARCH_REF" \
+      || fail "arch.h 补齐后校验失败"
+    echo "arch.h: 已补齐 (提供 PT_REGS_* / __ksyscall 所需的架构寄存器宏)"
+  fi
+else
+  echo "kernel_includes.h 不存在或未引用 arch.h，跳过补齐"
+fi
+
+# builtin 分支 2026-10-05 同步官方 KernelSU 后遗留的两处编译错误
+# （全平台构建在 ksu.c 聚合编译阶段命中）：
+#   1) supercall/dispatch.c 引用 EVENT_SERVICES，
+#      但 builtin 的 uapi 头只定义了 EVENT 1/2/3，缺 EVENT_SERVICES = 4；
+#   2) selinux/rules.c 在 #if >= 5.10 块内重复声明 pol/old_pol
+#      （函数开头已声明），C89 风格重定义直接编译失败。
+# 以内容检测守卫：主头已含 EVENT_SERVICES 或重复声明已消失时自动跳过，幂等。
+DISP_FILE="$KSU_DIR/kernel/supercall/dispatch.c"
+RULES_FILE="$KSU_DIR/kernel/selinux/rules.c"
+if { [ -f "$DISP_FILE" ] && grep -q 'EVENT_SERVICES' "$DISP_FILE" && \
+     ! grep -q 'EVENT_SERVICES' "$KSU_DIR/kernel/include/uapi/supercall.h"; } || \
+   { [ -f "$RULES_FILE" ] && grep -q 'struct selinux_policy \*pol, \*old_pol = selinux_state.policy;' "$RULES_FILE"; }; then
+  echo "应用 builtin 同步遗留问题修复 (EVENT_SERVICES + rules.c 重复声明)..."
+  patch -p1 --forward -d "$KSU_DIR" < "$COMPAT_DIR/builtin-sync-fixes.patch" \
+    || fail "builtin 同步遗留修复应用失败（SukiSU 上游代码可能已变化）"
+  grep -q 'EVENT_SERVICES, 4' "$KSU_DIR/kernel/include/uapi/supercall.h" \
+    || fail "EVENT_SERVICES 补齐后校验失败"
+  ! grep -q 'struct selinux_policy \*pol, \*old_pol = selinux_state.policy;' "$RULES_FILE" \
+    || fail "rules.c 重复声明修复后校验失败"
+  echo "EVENT_SERVICES 已补齐; rules.c 重复声明已移除"
+else
+  echo "builtin 同步遗留问题不存在或已修复，跳过"
 fi
 
 echo "SukiSU API 兼容补丁处理完成"
