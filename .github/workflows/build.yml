@@ -510,11 +510,11 @@ jobs:
       # SukiSU 的 builtin 分支（内建+SUSFS 产品线）与 main 分支相互独立，
       # UAPI 版本落后于官方管理器（管理器按 main 分支构建，UAPI 4）。
       # 内核 UAPI < 管理 UAPI 时，管理器首页会误报"需要更新内核"。
-      # 此步骤把官方 main 的 UAPI 2->4 内核侧提交移植到 builtin 检出：
-      #   - 86e9b3bf: scoped su-session driver fd (UAPI 3)
-      #   - dda78702: KSU_GET_INFO_FLAG_BUNDLED (UAPI 4, 仅 UAPI 号+flag 常量,
-      #     其 MODULE 部分依赖 builtin 不存在的 ksu_bundled，内建编译不参与)
-      # 若上游 builtin 日后自行同步 UAPI >= 4，本步骤自动跳过。
+      # 此步骤把官方 main 的 UAPI 2->4 常量移植到 builtin 检出。
+      # 2026-10 起上游 builtin 已自行合并 su-session 全套实现
+      # (ksu_install_su_fd / allow_su_session)，本补丁收敛为仅 UAPI 号
+      # 2->4 + KSU_GET_INFO_FLAG_BUNDLED 两个常量；若上游同步 UAPI >= 4
+      # 则自动跳过。
       - name: 同步 SukiSU 内核 UAPI 版本（对齐官方管理器）
         if: inputs.ksu_variant == 'SukiSU'
         working-directory: ${{ env.KERNEL_ROOT }}
@@ -546,7 +546,7 @@ jobs:
               echo "::error::UAPI 对齐补丁应用失败：builtin 分支 supercall 代码可能已更新，请重新生成 scripts/ksu_uapi_sync/builtin-uapi4.patch"
               exit 1
             fi
-            echo "已应用 UAPI 4 对齐补丁 (su-session fd + FLAG_BUNDLED)"
+            echo "已应用 UAPI 4 对齐补丁 (UAPI 号 2->4 + FLAG_BUNDLED 常量)"
           fi
 
           FINAL_UAPI=$(read_uapi)
