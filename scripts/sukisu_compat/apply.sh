@@ -14,6 +14,9 @@
 #   4) 同步同时引入两处编译错误：supercall/dispatch.c 引用未定义的
 #      EVENT_SERVICES（uapi 头缺常量），selinux/rules.c 在 5.10+ 分支
 #      重复声明 pol/old_pol。
+#   5) builtin 在 app 启动路径对管理器/授权应用 disable_seccomp()，
+#      管理器首页 "Seccomp 状态" 显示"未启用"；改为对齐 main 分支/BakaSU
+#      的过滤模式（保留 seccomp 过滤器 + action cache 放行 reboot）。
 #
 # 修复均以内容检测守卫，上游自行修复后自动跳过，重复执行幂等。
 #
@@ -116,6 +119,41 @@ if { [ -f "$DISP_FILE" ] && grep -q 'EVENT_SERVICES' "$DISP_FILE" && \
   echo "EVENT_SERVICES 已补齐; rules.c 重复声明已移除"
 else
   echo "builtin 同步遗留问题不存在或已修复，跳过"
+fi
+
+# ---- Seccomp 过滤模式（builtin 分支）----
+# 背景：builtin 分支在 app 启动路径（zygote setresuid 钩子）对管理器与授权
+# 应用直接调用 disable_seccomp()，管理器进程自身的 seccomp 过滤器被清除，
+# 管理器首页 "Seccomp 状态" 显示"未启用"。main 分支 / BakaSU 的对应实现是
+# 保留过滤器（"过滤模式"），仅通过 seccomp action cache（GKI 5.10+ backport）
+# 放行 reboot。
+# 处理：改写 lsm_hook.c 的 6 处 disable_seccomp() 调用点为 cache-allow 形式，
+# 分发 infra/seccomp_cache.c/h 并在 ksu.c 聚合编译；>=5.10 保留过滤器，
+# <5.10 维持 disable_seccomp() 原行为（action cache 不存在）。
+# 守卫：仅命中 builtin 的 handle_zygote_setresuid 时执行，main 分支自动跳过；
+# 上游自行修复后幂等跳过。
+if [ -f "$LSM_FILE" ] && grep -q 'handle_zygote_setresuid' "$LSM_FILE"; then
+  if grep -q 'ksu_seccomp_allow_cache' "$LSM_FILE"; then
+    echo "lsm_hook.c 已包含 seccomp 过滤模式逻辑，跳过"
+  else
+    echo "应用 seccomp 过滤模式补丁 (对齐 main 分支/BakaSU：管理器与授权应用保留 seccomp 过滤器)..."
+    [ -d "$KSU_DIR/kernel/infra" ] || fail "未找到 $KSU_DIR/kernel/infra 目录，SukiSU builtin 结构可能已变化"
+    cp "$COMPAT_DIR/seccomp_cache.h" "$KSU_DIR/kernel/infra/seccomp_cache.h" \
+      || fail "seccomp_cache.h 分发失败"
+    cp "$COMPAT_DIR/seccomp_cache.c" "$KSU_DIR/kernel/infra/seccomp_cache.c" \
+      || fail "seccomp_cache.c 分发失败"
+    python3 "$COMPAT_DIR/seccomp_filter_mode.py" "$KSU_DIR" \
+      || fail "seccomp 过滤模式补丁应用失败（SukiSU builtin 上游代码可能已变化）"
+    grep -q 'ksu_seccomp_allow_cache' "$LSM_FILE" \
+      || fail "seccomp 过滤模式补丁应用后校验失败 (lsm_hook.c)"
+    grep -q '#include "infra/seccomp_cache.c"' "$KSU_DIR/kernel/ksu.c" \
+      || fail "seccomp 过滤模式补丁应用后校验失败 (ksu.c)"
+    grep -q '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)' "$KSU_DIR/kernel/infra/seccomp_cache.c" \
+      || fail "seccomp_cache.c 版本守卫校验失败"
+    echo "seccomp 过滤模式已启用：管理器首页 Seccomp 状态将显示\"过滤模式\""
+  fi
+else
+  echo "lsm_hook.c 无 builtin setresuid 路径（main 分支已内置过滤模式），跳过 seccomp 过滤模式补丁"
 fi
 
 echo "SukiSU API 兼容补丁处理完成"
