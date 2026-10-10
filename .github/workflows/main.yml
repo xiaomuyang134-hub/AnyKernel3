@@ -428,8 +428,12 @@ jobs:
           esac
           echo "KSU_NAME=$KSU_NAME" >> $GITHUB_ENV
 
-          # 版本信息
-          KSU_VER="${{ needs.get-manager.outputs.ksuVer }}"
+          # 版本信息（内核侧已对齐官方上传构建时，实际内核 KSU 版本 = managerVer，
+          # managerVer 为空（管理器拉取失败）时回退 ksuVer）
+          KSU_VER="${{ needs.get-manager.outputs.managerVer }}"
+          if [ -z "$KSU_VER" ]; then
+            KSU_VER="${{ needs.get-manager.outputs.ksuVer }}"
+          fi
           SUS_VER="${{ needs.get-manager.outputs.susVer }}"
           echo "KSU_VER=$KSU_VER" >> $GITHUB_ENV
           echo "SUS_VER=$SUS_VER" >> $GITHUB_ENV
